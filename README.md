@@ -135,6 +135,71 @@ if !found {
 // path is a slice of Pather objects which you can cast back to *Tile.
 ```
 
+Updatable grid navigation (`Grid`)
+----------------------------------
+
+The generic `Pather` API builds a fresh node map for every query.  For games
+and simulations where a small number of cells change between queries — a door
+slamming shut, a patch of mud appearing — `Grid` provides a fixed-size
+navigation grid that is updated in place and re-queried cheaply.
+
+Features:
+
+*   Four- or eight-neighbour search (`Neighbor4` / `Neighbor8`).
+*   Per-cell terrain (entry) costs and dynamic blocking.  Diagonal moves cost
+    `math.Sqrt2` times the destination cell's terrain cost.
+*   In eight-neighbour mode a diagonal move is only allowed when both
+    orthogonal side cells are passable, so paths never cut through a wall
+    corner.
+*   O(1) cell updates (`SetCost`, `SetBlocked`, or a batched atomic
+    `Update`).  The grid is never rebuilt; search state is reused across
+    queries with generation stamps, leaving unrelated cells untouched.
+*   Deterministic equal-cost tie breaking: the same grid and query always
+    produce the same path.
+*   Explicit errors for blocked endpoints, unreachable goals, out-of-bounds
+    coordinates, invalid (negative / NaN / infinite) costs and empty grids.
+
+```go
+// Build a 10x10 grid allowing diagonal movement.
+g, err := astar.NewGrid(10, 10, astar.Neighbor8)
+if err != nil {
+	log.Fatal(err)
+}
+
+// Terrain costs: mud is slower, walls block movement entirely.
+if err := g.SetCost(4, 4, 5); err != nil {
+	log.Fatal(err)
+}
+if err := g.SetBlocked(5, 5); err != nil {
+	log.Fatal(err)
+}
+
+path, totalCost, err := g.FindPath(astar.Cell{X: 0, Y: 0}, astar.Cell{X: 9, Y: 9})
+if errors.Is(err, astar.ErrNoPath) {
+	log.Println("No route exists")
+} else if err != nil {
+	log.Fatal(err)
+}
+// path is a []astar.Cell in start-to-goal order.
+
+// A gate closes on the planned route: update a few cells and query again.
+err = g.Update(
+	astar.CellUpdate{X: 3, Y: 3, Blocked: true},
+	astar.CellUpdate{X: 4, Y: 3, Cost: 2.5},
+)
+path, totalCost, err = g.FindPath(astar.Cell{X: 0, Y: 0}, astar.Cell{X: 9, Y: 9})
+```
+
+A grid can also be constructed from a row-major cost matrix, using
+`astar.BlockedCost` for impassable cells:
+
+```go
+g, err := astar.NewGridFromCosts(width, height, astar.Neighbor4, costs)
+```
+
+`Grid` is not safe for concurrent use; guard it with a lock if multiple
+goroutines query or update it.
+
 Authors
 -------
 
